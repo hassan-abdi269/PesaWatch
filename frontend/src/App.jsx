@@ -5,6 +5,7 @@ import ForgotPasswordPage from './pages/ForgotPasswordPage'
 import VerifyEmailPage from './pages/VerifyEmailPage'
 import DashboardPage from './pages/DashboardPage'
 import LeakagePage from './pages/LeakagePage'
+import LeakageInvestigationPage from './pages/LeakageInvestigationPage'
 import InventoryPage from './pages/InventoryPage'
 import SalesPage from './pages/SalesPage'
 import ExpensesPage from './pages/ExpensesPage'
@@ -40,6 +41,7 @@ export default function App() {
             <Route path="/suppliers" element={<SuppliersPage />} />
             <Route path="/employees" element={<EmployeesPage />} />
             <Route path="/leakage" element={<LeakagePage />} />
+            <Route path="/leakage/:id" element={<LeakageInvestigationPage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/notifications" element={<NotificationsPage />} />
             <Route path="/settings" element={<SettingsPage />} />

@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.extensions import db
-from app.models import Customer, Leakage, Product, Sale, Expense, Supplier, User
+from app.models import Customer, Expense, Leakage, Product, Sale, Supplier, User
 from app.services.leakage_service import (
     calculate_cash_variance,
     calculate_inventory_variance,
@@ -11,6 +11,11 @@ from app.services.leakage_service import (
 )
 
 leakage_bp = Blueprint("leakage", __name__)
+VALID_STATUSES = {"Open", "Investigating", "Resolved", "Not a Loss"}
+
+
+def current_user():
+    return User.query.get(int(get_jwt_identity()))
 
 
 def serialize_leakage(item):
@@ -26,10 +31,6 @@ def serialize_leakage(item):
         "notes": item.notes,
         "createdAt": item.created_at.isoformat() if item.created_at else None,
     }
-
-
-def current_user():
-    return User.query.get(int(get_jwt_identity()))
 
 
 @leakage_bp.get("/leakage")
@@ -71,13 +72,11 @@ def run_detection():
     expected_cash = max(sales_total - expense_total, 0)
     actual_cash = sum(float(item.amount or 0) for item in sales if item.payment_method == "Cash")
     cash_variance = calculate_cash_variance(expected_cash, actual_cash)
-
     inventory_variance = sum(
-        calculate_inventory_variance(item.quantity + 10, item.quantity, item.purchase_price)
+        calculate_inventory_variance(int(item.quantity or 0) + 10, int(item.quantity or 0), float(item.purchase_price or 0))
         for item in products
-        if item.quantity is not None
     )
-    overdue_credit = sum(calculate_overdue_credit(item.balance, item.due_date) for item in customers)
+    overdue_credit = sum(calculate_overdue_credit(float(item.balance or 0), item.due_date) for item in customers)
     supplier_variance = sum(
         max(0, calculate_supplier_price_increase(item.previous_average_price, item.current_average_price))
         * float(item.previous_average_price or 0) / 100
@@ -85,14 +84,10 @@ def run_detection():
     )
 
     records = [
-        ("Cash discrepancy", "Cash Variance", "Medium", cash_variance, expected_cash, actual_cash,
-         "Difference between expected and actual cash activity."),
-        ("Stock discrepancy", "Inventory Variance", "Warning", inventory_variance, inventory_variance, 0,
-         "Expected inventory quantity is higher than recorded quantity."),
-        ("Outstanding customer credit", "Customer Credit", "Attention", overdue_credit, overdue_credit, 0,
-         "Overdue customer balances require collection follow-up."),
-        ("Supplier pricing increased", "Supplier Price Change", "Warning", supplier_variance, supplier_variance, 0,
-         "Supplier pricing increased and may affect margins."),
+        ("Cash discrepancy", "Cash Variance", "Medium", cash_variance, expected_cash, actual_cash, "Difference between expected and actual cash activity."),
+        ("Stock discrepancy", "Inventory Variance", "Warning", inventory_variance, inventory_variance, 0, "Expected inventory quantity is higher than recorded quantity."),
+        ("Outstanding customer credit", "Customer Credit", "Attention", overdue_credit, overdue_credit, 0, "Overdue customer balances require collection follow-up."),
+        ("Supplier pricing increased", "Supplier Price Change", "Warning", supplier_variance, supplier_variance, 0, "Supplier pricing increased and may affect margins."),
     ]
 
     created = 0
@@ -105,15 +100,9 @@ def run_detection():
             existing.notes = notes
             continue
         db.session.add(Leakage(
-            business_id=business_id,
-            title=title,
-            leakage_type=leakage_type,
-            risk_level=risk,
-            amount=round(amount, 2),
-            expected_value=round(expected, 2),
-            actual_value=round(actual, 2),
-            status="Open",
-            notes=notes,
+            business_id=business_id, title=title, leakage_type=leakage_type,
+            risk_level=risk, amount=round(amount, 2), expected_value=round(expected, 2),
+            actual_value=round(actual, 2), status="Open", notes=notes,
         ))
         created += 1
 
@@ -132,7 +121,7 @@ def investigate_leakage(leakage_id):
     data = request.get_json(silent=True) or {}
     if "notes" in data:
         item.notes = str(data["notes"])
-    if data.get("status") in {"Open", "Investigating", "Resolved", "Not a Loss"}:
+    if data.get("status") in VALID_STATUSES:
         item.status = data["status"]
     db.session.commit()
     return jsonify({"success": True, "data": serialize_leakage(item), "message": "Investigation updated."})
@@ -147,8 +136,10 @@ def update_leakage_status(leakage_id):
         return jsonify({"success": False, "message": "Leakage not found"}), 404
 
     data = request.get_json(silent=True) or {}
-    if data.get("status") not in {"Open", "Investigating", "Resolved", "Not a Loss"}:
+    if data.get("status") not in VALID_STATUSES:
         return jsonify({"success": False, "message": "Invalid leakage status"}), 422
     item.status = data["status"]
+    if "notes" in data:
+        item.notes = str(data["notes"])
     db.session.commit()
     return jsonify({"success": True, "data": serialize_leakage(item), "message": "Leakage status updated."})
