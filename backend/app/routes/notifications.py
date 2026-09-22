@@ -1,6 +1,7 @@
-from flask import Blueprint, jsonify
+From flask import Blueprint, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
+from app.extensions import db
 from app.models import User, Notification
 
 notifications_bp = Blueprint("notifications", __name__)
@@ -30,7 +31,7 @@ def mark_notification_read(notification_id):
     if not notification:
         return jsonify({"success": False, "message": "Notification not found"}), 404
     notification.read = True
-    notification.save if False else None
+    db.session.commit()
     return jsonify({"success": True, "message": "Notification marked as read."})
 
 
@@ -42,4 +43,5 @@ def mark_all_notifications_read():
     notifications = Notification.query.filter_by(business_id=user.business_id).all()
     for n in notifications:
         n.read = True
+    db.session.commit()
     return jsonify({"success": True, "message": "All notifications marked as read."})

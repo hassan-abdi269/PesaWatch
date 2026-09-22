@@ -1,4 +1,4 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import LandingPage from './pages/LandingPage'
 import AuthPage from './pages/AuthPage'
 import ForgotPasswordPage from './pages/ForgotPasswordPage'
@@ -15,8 +15,8 @@ import ReportsPage from './pages/ReportsPage'
 import NotificationsPage from './pages/NotificationsPage'
 import SettingsPage from './pages/SettingsPage'
 import ProtectedRoute from './components/ProtectedRoute'
-import { DashboardLayout, MarketingLayout } from './components/layout'
 import { AuthProvider } from './context/AuthContext'
+import { DashboardLayout, MarketingLayout } from './components/layout'
 
 export default function App() {
   return (
@@ -24,10 +24,6 @@ export default function App() {
       <Routes>
         <Route element={<MarketingLayout />}>
           <Route path="/" element={<LandingPage />} />
-          <Route path="/features" element={<LandingPage />} />
-          <Route path="/how-it-works" element={<LandingPage />} />
-          <Route path="/pricing" element={<LandingPage />} />
-          <Route path="/about" element={<LandingPage />} />
           <Route path="/login" element={<AuthPage mode="login" />} />
           <Route path="/register" element={<AuthPage mode="register" />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
@@ -49,6 +45,8 @@ export default function App() {
             <Route path="/settings" element={<SettingsPage />} />
           </Route>
         </Route>
+
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AuthProvider>
   )
