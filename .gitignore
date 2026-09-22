@@ -16,3 +16,24 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 frontend/.env
+
+# SQLite / instance files
+backend/instance/
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+.env
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# OS
+.DS_Store
