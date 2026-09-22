@@ -1,5 +1,6 @@
 from flask import Flask
 from flask_cors import CORS
+from flask_migrate import Migrate              # ← new
 from .config import Config
 from .extensions import db, jwt
 from .routes.auth import auth_bp
@@ -15,6 +16,8 @@ from .routes.leakage import leakage_bp
 from .routes.reports import reports_bp
 from .routes.notifications import notifications_bp
 
+migrate = Migrate()                            # ← new (module-level)
+
 
 def create_app():
     app = Flask(__name__)
@@ -22,10 +25,18 @@ def create_app():
 
     db.init_app(app)
     jwt.init_app(app)
+    migrate.init_app(app, db)                  # ← new
     CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": app.config["FRONTEND_URL"]}})
 
-    with app.app_context():
-        db.create_all()
+    # ❌ REMOVED: with app.app_context(): db.create_all()
+    #    Migrations are now the source of truth for the schema.
+    #    If you want a safety net for a truly empty DB, use:
+    #
+    #    with app.app_context():
+    #        db.create_all()
+    #
+    #    but leave it commented once you've run `flask db upgrade` at
+    #    least once.
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(business_bp, url_prefix="/api")
