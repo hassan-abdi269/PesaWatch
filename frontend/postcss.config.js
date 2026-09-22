@@ -1,3 +1,6 @@
 export default {
-  plugins: [require('@tailwindcss/forms')],
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
 }

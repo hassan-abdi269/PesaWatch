@@ -1,179 +1,154 @@
-from flask import jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask import Blueprint, jsonify, request
+from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.extensions import db
-from app.models import User, Sale, Expense, Product, Leakage, Customer, Supplier
+from app.models import Customer, Leakage, Product, Sale, Expense, Supplier, User
 from app.services.leakage_service import (
     calculate_cash_variance,
     calculate_inventory_variance,
     calculate_overdue_credit,
     calculate_supplier_price_increase,
-    calculate_discount_variance,
 )
 
-from app.routes.leakage import leakage_bp
+leakage_bp = Blueprint("leakage", __name__)
+
+
+def serialize_leakage(item):
+    return {
+        "id": item.id,
+        "title": item.title,
+        "leakageType": item.leakage_type,
+        "riskLevel": item.risk_level,
+        "amount": item.amount,
+        "expectedValue": item.expected_value,
+        "actualValue": item.actual_value,
+        "status": item.status,
+        "notes": item.notes,
+        "createdAt": item.created_at.isoformat() if item.created_at else None,
+    }
+
+
+def current_user():
+    return User.query.get(int(get_jwt_identity()))
 
 
 @leakage_bp.get("/leakage")
 @jwt_required()
 def get_leakages():
-    user_id = int(get_jwt_identity())
-    user = User.query.get(user_id)
+    user = current_user()
     if not user:
         return jsonify({"success": False, "message": "User not found"}), 404
-
-    leakages = Leakage.query.filter_by(business_id=user.business_id).all()
-    return jsonify({"success": True, "data": [{
-        "id": l.id,
-        "title": l.title,
-        "leakageType": l.leakage_type,
-        "riskLevel": l.risk_level,
-        "amount": l.amount,
-        "expectedValue": l.expected_value,
-        "actualValue": l.actual_value,
-        "status": l.status,
-        "notes": l.notes,
-    } for l in leakages]})
+    items = Leakage.query.filter_by(business_id=user.business_id).order_by(Leakage.created_at.desc()).all()
+    return jsonify({"success": True, "data": [serialize_leakage(item) for item in items]})
 
 
 @leakage_bp.get("/leakage/<int:leakage_id>")
 @jwt_required()
 def get_leakage(leakage_id):
-    user_id = int(get_jwt_identity())
-    user = User.query.get(user_id)
-    leakage = Leakage.query.filter_by(id=leakage_id, business_id=user.business_id).first()
-    if not leakage:
+    user = current_user()
+    item = Leakage.query.filter_by(id=leakage_id, business_id=user.business_id).first() if user else None
+    if not item:
         return jsonify({"success": False, "message": "Leakage not found"}), 404
-    return jsonify({"success": True, "data": {
-        "id": leakage.id,
-        "title": leakage.title,
-        "leakageType": leakage.leakage_type,
-        "riskLevel": leakage.risk_level,
-        "amount": leakage.amount,
-        "expectedValue": leakage.expected_value,
-        "actualValue": leakage.actual_value,
-        "status": leakage.status,
-        "notes": leakage.notes,
-    }})
+    return jsonify({"success": True, "data": serialize_leakage(item)})
 
 
 @leakage_bp.post("/leakage/run-detection")
 @jwt_required()
 def run_detection():
-    user_id = int(get_jwt_identity())
-    user = User.query.get(user_id)
+    user = current_user()
     if not user:
         return jsonify({"success": False, "message": "User not found"}), 404
 
     business_id = user.business_id
+    sales = Sale.query.filter_by(business_id=business_id).all()
+    expenses = Expense.query.filter_by(business_id=business_id).all()
+    products = Product.query.filter_by(business_id=business_id).all()
+    customers = Customer.query.filter_by(business_id=business_id).all()
+    suppliers = Supplier.query.filter_by(business_id=business_id).all()
 
-    sales_total = sum(s.amount for s in Sale.query.filter_by(business_id=business_id).all())
-    expense_total = sum(e.amount for e in Expense.query.filter_by(business_id=business_id).all())
+    sales_total = sum(float(item.amount or 0) for item in sales)
+    expense_total = sum(float(item.amount or 0) for item in expenses)
     expected_cash = max(sales_total - expense_total, 0)
-    actual_cash = sum(s.amount for s in Sale.query.filter_by(business_id=business_id).all())
+    actual_cash = sum(float(item.amount or 0) for item in sales if item.payment_method == "Cash")
     cash_variance = calculate_cash_variance(expected_cash, actual_cash)
 
-    inventory_variance = 0.0
-    for product in Product.query.filter_by(business_id=business_id).all():
-        if product.selling_price and product.quantity:
-            expected_qty = max(product.quantity + 10, 0)
-            inventory_variance += calculate_inventory_variance(expected_qty, product.quantity, product.purchase_price)
-
-    overdue_variance = 0.0
-    for customer in Customer.query.filter_by(business_id=business_id).all():
-        overdue_variance += calculate_overdue_credit(customer.balance, customer.due_date)
-
-    supplier_variance = 0.0
-    for supplier in Supplier.query.filter_by(business_id=business_id).all():
-        supplier_variance += calculate_supplier_price_increase(
-            supplier.previous_average_price,
-            supplier.current_average_price,
-        ) * supplier.previous_average_price / 100
-
-    discount_variance = 0.0
-    for product in Product.query.filter_by(business_id=business_id).all():
-        discount_variance += calculate_discount_variance(product.selling_price, max(product.purchase_price, 0))
+    inventory_variance = sum(
+        calculate_inventory_variance(item.quantity + 10, item.quantity, item.purchase_price)
+        for item in products
+        if item.quantity is not None
+    )
+    overdue_credit = sum(calculate_overdue_credit(item.balance, item.due_date) for item in customers)
+    supplier_variance = sum(
+        max(0, calculate_supplier_price_increase(item.previous_average_price, item.current_average_price))
+        * float(item.previous_average_price or 0) / 100
+        for item in suppliers
+    )
 
     records = [
-        {
-            "title": "Cash discrepancy",
-            "leakage_type": "Cash Variance",
-            "risk_level": "Medium",
-            "amount": round(cash_variance or 5600, 2),
-            "expected_value": round(expected_cash, 2),
-            "actual_value": round(actual_cash, 2),
-            "status": "Investigating",
-            "notes": "Difference between expected and actual cash activity detected.",
-        },
-        {
-            "title": "Stock discrepancy",
-            "leakage_type": "Inventory Variance",
-            "risk_level": "Warning",
-            "amount": round(inventory_variance or 5600, 2),
-            "expected_value": round(sales_total * 0.12, 2),
-            "actual_value": round(max(sales_total * 0.08, 0), 2),
-            "status": "Open",
-            "notes": "Inventory value differs from expected stock values.",
-        },
-        {
-            "title": "Outstanding customer credit",
-            "leakage_type": "Customer Credit",
-            "risk_level": "Attention",
-            "amount": round(overdue_variance or 8400, 2),
-            "expected_value": round(overdue_variance or 8400, 2),
-            "actual_value": 0,
-            "status": "Open",
-            "notes": "Overdue customer balances require collection follow-up.",
-        },
-        {
-            "title": "Supplier pricing increased",
-            "leakage_type": "Supplier Price Change",
-            "risk_level": "Warning",
-            "amount": round(supplier_variance or 3200, 2),
-            "expected_value": round(supplier_variance or 3200, 2),
-            "actual_value": 0,
-            "status": "Open",
-            "notes": "Supplier pricing increased above the configured threshold.",
-        },
+        ("Cash discrepancy", "Cash Variance", "Medium", cash_variance, expected_cash, actual_cash,
+         "Difference between expected and actual cash activity."),
+        ("Stock discrepancy", "Inventory Variance", "Warning", inventory_variance, inventory_variance, 0,
+         "Expected inventory quantity is higher than recorded quantity."),
+        ("Outstanding customer credit", "Customer Credit", "Attention", overdue_credit, overdue_credit, 0,
+         "Overdue customer balances require collection follow-up."),
+        ("Supplier pricing increased", "Supplier Price Change", "Warning", supplier_variance, supplier_variance, 0,
+         "Supplier pricing increased and may affect margins."),
     ]
 
-    for record in records:
-        existing = Leakage.query.filter_by(business_id=business_id, title=record["title"]).first()
+    created = 0
+    for title, leakage_type, risk, amount, expected, actual, notes in records:
+        existing = Leakage.query.filter_by(business_id=business_id, title=title).first()
         if existing:
+            existing.amount = round(amount, 2)
+            existing.expected_value = round(expected, 2)
+            existing.actual_value = round(actual, 2)
+            existing.notes = notes
             continue
-        leakage = Leakage(**record, business_id=business_id)
-        db.session.add(leakage)
+        db.session.add(Leakage(
+            business_id=business_id,
+            title=title,
+            leakage_type=leakage_type,
+            risk_level=risk,
+            amount=round(amount, 2),
+            expected_value=round(expected, 2),
+            actual_value=round(actual, 2),
+            status="Open",
+            notes=notes,
+        ))
+        created += 1
 
     db.session.commit()
-    return jsonify({"success": True, "message": "Leakage detection completed using live business data."})
+    return jsonify({"success": True, "message": "Leakage detection completed using live business data.", "created": created})
 
 
 @leakage_bp.post("/leakage/<int:leakage_id>/investigate")
 @jwt_required()
 def investigate_leakage(leakage_id):
-    user_id = int(get_jwt_identity())
-    user = User.query.get(user_id)
-    leakage = Leakage.query.filter_by(id=leakage_id, business_id=user.business_id).first()
-    if not leakage:
+    user = current_user()
+    item = Leakage.query.filter_by(id=leakage_id, business_id=user.business_id).first() if user else None
+    if not item:
         return jsonify({"success": False, "message": "Leakage not found"}), 404
 
-    data = user
-    payload = data
-    return jsonify({"success": True, "message": "Investigation workflow ready."})
+    data = request.get_json(silent=True) or {}
+    if "notes" in data:
+        item.notes = str(data["notes"])
+    if data.get("status") in {"Open", "Investigating", "Resolved", "Not a Loss"}:
+        item.status = data["status"]
+    db.session.commit()
+    return jsonify({"success": True, "data": serialize_leakage(item), "message": "Investigation updated."})
 
 
 @leakage_bp.put("/leakage/<int:leakage_id>/status")
 @jwt_required()
 def update_leakage_status(leakage_id):
-    user_id = int(get_jwt_identity())
-    user = User.query.get(user_id)
-    leakage = Leakage.query.filter_by(id=leakage_id, business_id=user.business_id).first()
-    if not leakage:
+    user = current_user()
+    item = Leakage.query.filter_by(id=leakage_id, business_id=user.business_id).first() if user else None
+    if not item:
         return jsonify({"success": False, "message": "Leakage not found"}), 404
 
-    from flask import request
     data = request.get_json(silent=True) or {}
-    leakage.status = data.get("status", leakage.status)
-    leakage.notes = data.get("notes", leakage.notes)
+    if data.get("status") not in {"Open", "Investigating", "Resolved", "Not a Loss"}:
+        return jsonify({"success": False, "message": "Invalid leakage status"}), 422
+    item.status = data["status"]
     db.session.commit()
-    return jsonify({"success": True, "message": "Leakage status updated."})
+    return jsonify({"success": True, "data": serialize_leakage(item), "message": "Leakage status updated."})
