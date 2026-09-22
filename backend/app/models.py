@@ -21,7 +21,7 @@ class Business(db.Model):
     expenses = db.relationship("Expense", backref="business", lazy=True)
     customers = db.relationship("Customer", backref="business", lazy=True)
     suppliers = db.relationship("Supplier", backref="business", lazy=True)
-    employees = db.relationship("Employee", backref="business", lazy=True)
+    employee_records = db.relationship("Employee", backref="business", lazy=True)
     leakages = db.relationship("Leakage", backref="business", lazy=True)
     notifications = db.relationship("Notification", backref="business", lazy=True)
 
