@@ -4,14 +4,18 @@ import api from '../services/api'
 const emptyForm = {
   invoiceNo: '',
   customerName: '',
+  customerId: '',
   paymentMethod: 'Cash',
   amount: '',
   discount: '',
   status: 'Paid',
+  employeeId: '',
 }
 
 export default function SalesPage() {
   const [sales, setSales] = useState([])
+  const [employees, setEmployees] = useState([])
+  const [customers, setCustomers] = useState([])
   const [summary, setSummary] = useState({
     todaySales: 0,
     totalSales: 0,
@@ -19,18 +23,22 @@ export default function SalesPage() {
     mpesaSales: 0,
   })
   const [form, setForm] = useState(emptyForm)
-  const [editingId, setEditingId] = useState(null)   // null = adding, number = editing that sale
+  const [editingId, setEditingId] = useState(null)
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   async function loadAll() {
-    const [salesRes, sumRes] = await Promise.all([
+    const [salesRes, sumRes, empRes, custRes] = await Promise.all([
       api.get('/sales'),
       api.get('/sales/summary'),
+      api.get('/employees'),
+      api.get('/customers'),
     ])
     setSales(salesRes.data.data || [])
     setSummary(sumRes.data.data || {})
+    setEmployees(empRes.data.data || [])
+    setCustomers(custRes.data.data || [])
   }
 
   useEffect(() => {
@@ -55,10 +63,12 @@ export default function SalesPage() {
     setForm({
       invoiceNo: sale.invoiceNo || '',
       customerName: sale.customerName || '',
+      customerId: sale.customerId ?? '',
       paymentMethod: sale.paymentMethod || 'Cash',
       amount: sale.amount ?? '',
       discount: sale.discount ?? '',
       status: sale.status || 'Paid',
+      employeeId: sale.employeeId ?? '',
     })
     setEditingId(sale.id)
     setShowForm(true)
@@ -84,11 +94,13 @@ export default function SalesPage() {
     setSaving(true)
     const payload = {
       invoiceNo: form.invoiceNo || undefined,
+      customerId: form.customerId ? Number(form.customerId) : null,
       customerName: form.customerName || 'Walk-in',
       paymentMethod: form.paymentMethod,
       amount: Number(form.amount),
       discount: Number(form.discount || 0),
       status: form.status,
+      employeeId: form.employeeId ? Number(form.employeeId) : null,
     }
 
     try {
@@ -120,6 +132,11 @@ export default function SalesPage() {
 
   const fmt = (n) => `KSh ${Number(n || 0).toLocaleString()}`
 
+  function employeeName(id) {
+    if (!id) return '—'
+    return employees.find((e) => e.id === id)?.name || `#${id}`
+  }
+
   const cards = [
     ["Today's sales", fmt(summary.todaySales)],
     ['Total sales', fmt(summary.totalSales)],
@@ -139,12 +156,16 @@ export default function SalesPage() {
         </button>
       </div>
 
+      {error && !showForm && (
+        <div className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+      )}
+
       {showForm && (
         <form
           onSubmit={submit}
-          className="grid gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-soft md:grid-cols-3 md:p-6"
+          className="grid gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-soft md:grid-cols-4 md:p-6"
         >
-          <div className="md:col-span-3 text-sm font-semibold text-slate-700">
+          <div className="md:col-span-4 text-sm font-semibold text-slate-700">
             {editingId ? `Editing invoice ${form.invoiceNo || `#${editingId}`}` : 'New sale'}
           </div>
 
@@ -166,6 +187,34 @@ export default function SalesPage() {
               placeholder="Walk-in"
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-brand-500 outline-none"
             />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">Link to customer (optional)</label>
+            <select
+              value={form.customerId}
+              onChange={(e) => update('customerId', e.target.value)}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-brand-500 outline-none"
+            >
+              <option value="">— None (walk-in) —</option>
+              {customers.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">Employee</label>
+            <select
+              value={form.employeeId}
+              onChange={(e) => update('employeeId', e.target.value)}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-brand-500 outline-none"
+            >
+              <option value="">Unassigned</option>
+              {employees.map((emp) => (
+                <option key={emp.id} value={emp.id}>{emp.name}</option>
+              ))}
+            </select>
           </div>
 
           <div>
@@ -221,12 +270,12 @@ export default function SalesPage() {
           </div>
 
           {error && (
-            <div className="md:col-span-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">
+            <div className="md:col-span-4 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">
               {error}
             </div>
           )}
 
-          <div className="md:col-span-3 flex justify-end gap-2">
+          <div className="md:col-span-4 flex justify-end gap-2">
             <button
               type="button"
               onClick={cancelForm}
@@ -255,58 +304,62 @@ export default function SalesPage() {
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-soft">
-        <table className="min-w-full text-left text-sm">
-          <thead className="bg-slate-50 text-slate-700">
-            <tr>
-              <th className="px-4 py-3">Date</th>
-              <th className="px-4 py-3">Invoice</th>
-              <th className="px-4 py-3">Customer</th>
-              <th className="px-4 py-3">Payment</th>
-              <th className="px-4 py-3">Amount</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sales.length === 0 && (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead className="bg-slate-50 text-slate-700">
               <tr>
-                <td colSpan={7} className="px-4 py-6 text-center text-sm text-slate-500">
-                  No sales yet. Click <strong>Add Sale</strong> to record one.
-                </td>
+                <th className="px-4 py-3">Date</th>
+                <th className="px-4 py-3">Invoice</th>
+                <th className="px-4 py-3">Customer</th>
+                <th className="px-4 py-3">Employee</th>
+                <th className="px-4 py-3">Payment</th>
+                <th className="px-4 py-3">Amount</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3 text-right">Actions</th>
               </tr>
-            )}
-            {sales.map((sale) => (
-              <tr key={sale.id} className="border-t border-slate-200 hover:bg-slate-50">
-                <td className="px-4 py-3">
-                  {sale.date ? new Date(sale.date).toLocaleDateString() : '—'}
-                </td>
-                <td className="px-4 py-3">{sale.invoiceNo}</td>
-                <td className="px-4 py-3">{sale.customerName}</td>
-                <td className="px-4 py-3">{sale.paymentMethod}</td>
-                <td className="px-4 py-3">{fmt(sale.amount)}</td>
-                <td className="px-4 py-3">
-                  <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">
-                    {sale.status}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-right">
-                  <button
-                    onClick={() => startEdit(sale)}
-                    className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => remove(sale)}
-                    className="ml-2 rounded-full border border-red-200 px-3 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {sales.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-4 py-6 text-center text-sm text-slate-500">
+                    No sales yet. Click <strong>Add Sale</strong> to record one.
+                  </td>
+                </tr>
+              )}
+              {sales.map((sale) => (
+                <tr key={sale.id} className="border-t border-slate-200 hover:bg-slate-50">
+                  <td className="px-4 py-3">
+                    {sale.date ? new Date(sale.date).toLocaleDateString() : '—'}
+                  </td>
+                  <td className="px-4 py-3">{sale.invoiceNo}</td>
+                  <td className="px-4 py-3">{sale.customerName}</td>
+                  <td className="px-4 py-3">{employeeName(sale.employeeId)}</td>
+                  <td className="px-4 py-3">{sale.paymentMethod}</td>
+                  <td className="px-4 py-3 font-semibold">{fmt(sale.amount)}</td>
+                  <td className="px-4 py-3">
+                    <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">
+                      {sale.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      onClick={() => startEdit(sale)}
+                      className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => remove(sale)}
+                      className="ml-2 rounded-full border border-red-200 px-3 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   )
