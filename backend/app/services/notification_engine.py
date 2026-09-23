@@ -2,8 +2,12 @@
 Notification engine.
 
 Scans business data and writes Notification rows for anything that needs
-attention. Designed to be idempotent *within a day*: running it twice on the
-same day will not create duplicate notifications for the same condition.
+attention. Idempotent within a day: running it twice on the same day will not
+create duplicate notifications for the same condition.
+
+Thresholds are read from the business's BusinessSetting row (the ones you
+edit on /settings). Anything unset falls back to DEFAULTS at the top of
+this file.
 
 Usage:
     from app.services.notification_engine import run_all_checks
@@ -15,24 +19,48 @@ from collections import defaultdict
 from app.extensions import db
 from app.models import (
     Product, Sale, Expense, Customer, Supplier, Notification, Employee,
+    BusinessSetting,
 )
 
 
 # ---------------------------------------------------------------
-# Tunable thresholds — later, read these from BusinessSetting
+# Fallback thresholds (used when a business hasn't set its own)
 # ---------------------------------------------------------------
-LOW_STOCK_DAYS = 14                # expiring within N days
-OVERDUE_ESCALATION_DAYS = 30       # days past due → higher severity
-SUPPLIER_PRICE_HIKE_PCT = 10.0     # %
-SINGLE_DISCOUNT_PCT = 20.0         # single sale discount > 20% of amount
-TOTAL_DISCOUNT_PCT = 15.0          # total discounts > 15% of revenue (30d)
-EXPENSE_SPIKE_MULTIPLIER = 2.0     # category this month > 2× prior 3-month avg
-SALES_DROP_PCT = 50.0              # today's sales < 50% of daily avg → notice
-EMPLOYEE_DISCOUNT_MULT = 3.0       # employee discount rate > 3× average
+DEFAULTS = {
+    "low_stock_days": 14,
+    "overdue_escalation_days": 30,
+    "supplier_price_hike_pct": 10.0,
+    "single_discount_pct": 20.0,
+    "total_discount_pct": 15.0,
+    "expense_spike_multiplier": 2.0,
+    "sales_drop_pct": 50.0,
+    "employee_discount_mult": 3.0,
+    "stock_alert_threshold": 15,
+    "expense_variance_threshold": 5000.0,
+}
+
+
+def _load_thresholds(business_id):
+    """
+    Build a thresholds dict for this business.
+
+    Pulls from BusinessSetting when present; keeps DEFAULTS for anything
+    the business hasn't customised.
+    """
+    t = dict(DEFAULTS)
+    s = BusinessSetting.query.filter_by(business_id=business_id).first()
+    if s:
+        if s.stock_alert_threshold is not None:
+            t["stock_alert_threshold"] = int(s.stock_alert_threshold)
+        if s.supplier_price_threshold is not None:
+            t["supplier_price_hike_pct"] = float(s.supplier_price_threshold)
+        if s.expense_variance_threshold is not None:
+            t["expense_variance_threshold"] = float(s.expense_variance_threshold)
+    return t
 
 
 # ---------------------------------------------------------------
-# Dedup helper — avoid re-notifying on the same condition the same day
+# Dedup helper
 # ---------------------------------------------------------------
 def _already_notified_today(business_id, title):
     start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -63,37 +91,44 @@ def _add(business_id, title, message, ntype="info"):
 
 
 # ---------------------------------------------------------------
-# Individual checks — each returns the number of notifications created
+# Checks — each takes business_id and thresholds, returns count created
 # ---------------------------------------------------------------
 
-def check_low_stock(business_id):
+def check_low_stock(business_id, thresholds):
     created = 0
+    default_threshold = thresholds.get("stock_alert_threshold", 15)
     products = Product.query.filter_by(business_id=business_id).all()
 
     for p in products:
         qty = int(p.quantity or 0)
         reorder = int(p.reorder_level or 0)
+
+        # Effective threshold = the product's own reorder level, or the
+        # business-wide default if the product hasn't set one.
+        effective = reorder if reorder > 0 else default_threshold
+
         if qty == 0:
             if _add(business_id,
                     f"Out of stock: {p.name}",
                     f"{p.name} ({p.sku}) is out of stock. Reorder level was "
-                    f"{reorder}. Restock before you lose sales.",
+                    f"{effective}. Restock before you lose sales.",
                     "stock"):
                 created += 1
-        elif reorder > 0 and qty <= reorder:
+        elif effective > 0 and qty <= effective:
             if _add(business_id,
                     f"Low stock: {p.name}",
                     f"{p.name} ({p.sku}) is at {qty} units, at or below the "
-                    f"reorder level of {reorder}.",
+                    f"reorder level of {effective}.",
                     "stock"):
                 created += 1
 
     return created
 
 
-def check_expiring_stock(business_id):
+def check_expiring_stock(business_id, thresholds):
     created = 0
-    cutoff = datetime.utcnow() + timedelta(days=LOW_STOCK_DAYS)
+    days_window = thresholds.get("low_stock_days", 14)
+    cutoff = datetime.utcnow() + timedelta(days=days_window)
     products = (Product.query
                 .filter(Product.business_id == business_id,
                         Product.expiry_date.isnot(None),
@@ -114,9 +149,11 @@ def check_expiring_stock(business_id):
     return created
 
 
-def check_customer_credit(business_id):
+def check_customer_credit(business_id, thresholds):
     created = 0
     now = datetime.utcnow()
+    escalation = thresholds.get("overdue_escalation_days", 30)
+
     customers = (Customer.query
                  .filter(Customer.business_id == business_id,
                          Customer.balance > 0)
@@ -128,7 +165,7 @@ def check_customer_credit(business_id):
         days = (now - c.due_date).days
         balance = float(c.balance or 0)
 
-        if days >= OVERDUE_ESCALATION_DAYS:
+        if days >= escalation:
             if _add(business_id,
                     f"Severely overdue: {c.name}",
                     f"{c.name} owes KSh {balance:,.2f}, overdue by {days} days. "
@@ -151,13 +188,14 @@ def check_customer_credit(business_id):
     return created
 
 
-def check_supplier_prices(business_id):
+def check_supplier_prices(business_id, thresholds):
     created = 0
+    hike_pct = thresholds.get("supplier_price_hike_pct", 10.0)
     suppliers = Supplier.query.filter_by(business_id=business_id).all()
 
     for s in suppliers:
         pct = float(s.price_increase or 0)
-        if pct >= SUPPLIER_PRICE_HIKE_PCT:
+        if pct >= hike_pct:
             if _add(business_id,
                     f"Supplier price hike: {s.name}",
                     f"{s.name} raised average prices by {pct:.1f}% "
@@ -170,8 +208,11 @@ def check_supplier_prices(business_id):
     return created
 
 
-def check_discount_abuse(business_id):
+def check_discount_abuse(business_id, thresholds):
     created = 0
+    single_pct = thresholds.get("single_discount_pct", 20.0)
+    total_pct = thresholds.get("total_discount_pct", 15.0)
+
     cutoff = datetime.utcnow() - timedelta(days=30)
     sales = (Sale.query
              .filter(Sale.business_id == business_id,
@@ -182,7 +223,7 @@ def check_discount_abuse(business_id):
     for s in sales:
         amt = float(s.amount or 0)
         disc = float(s.discount or 0)
-        if amt > 0 and (disc / amt) * 100 > SINGLE_DISCOUNT_PCT:
+        if amt > 0 and (disc / amt) * 100 > single_pct:
             pct = (disc / amt) * 100
             if _add(business_id,
                     f"High discount on {s.invoice_no}",
@@ -196,7 +237,7 @@ def check_discount_abuse(business_id):
     total_disc = sum(float(s.discount or 0) for s in sales)
     if total_amt > 0:
         pct = (total_disc / total_amt) * 100
-        if pct > TOTAL_DISCOUNT_PCT:
+        if pct > total_pct:
             if _add(business_id,
                     "High aggregate discounts",
                     f"Discounts over the last 30 days are {pct:.1f}% of revenue "
@@ -207,9 +248,11 @@ def check_discount_abuse(business_id):
     return created
 
 
-def check_employee_discount_rate(business_id):
+def check_employee_discount_rate(business_id, thresholds):
     """Flag an employee whose discount rate is far above the business average."""
     created = 0
+    mult = thresholds.get("employee_discount_mult", 3.0)
+
     cutoff = datetime.utcnow() - timedelta(days=30)
     sales = (Sale.query
              .filter(Sale.business_id == business_id,
@@ -237,7 +280,7 @@ def check_employee_discount_rate(business_id):
         if amt <= 0:
             continue
         rate = by_emp_disc[emp_id] / amt
-        if rate > avg_rate * EMPLOYEE_DISCOUNT_MULT:
+        if rate > avg_rate * mult:
             emp = Employee.query.get(emp_id)
             name = emp.name if emp else f"Employee #{emp_id}"
             if _add(business_id,
@@ -251,10 +294,13 @@ def check_employee_discount_rate(business_id):
     return created
 
 
-def check_expense_spikes(business_id):
+def check_expense_spikes(business_id, thresholds):
     """Compare this calendar month's spend per category to the prior
     3-month average. Flag big jumps."""
     created = 0
+    mult = thresholds.get("expense_spike_multiplier", 2.0)
+    min_amount = thresholds.get("expense_variance_threshold", 5000.0)
+
     now = datetime.utcnow()
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     three_months_ago = month_start - timedelta(days=90)
@@ -278,12 +324,12 @@ def check_expense_spikes(business_id):
         prior_total = prior.get(cat, 0.0)
         if prior_total <= 0:
             continue
-        prior_avg = prior_total / 3.0  # rough 3-month average
-        if this_month > prior_avg * EXPENSE_SPIKE_MULTIPLIER:
+        prior_avg = prior_total / 3.0
+        if this_month > prior_avg * mult and this_month >= min_amount:
             if _add(business_id,
                     f"Expense spike: {cat}",
                     f"{cat} spend this month is KSh {this_month:,.2f}, "
-                    f"over {EXPENSE_SPIKE_MULTIPLIER}× the 3-month average of "
+                    f"over {mult:.1f}× the 3-month average of "
                     f"KSh {prior_avg:,.2f}.",
                     "info"):
                 created += 1
@@ -291,9 +337,11 @@ def check_expense_spikes(business_id):
     return created
 
 
-def check_sales_drop(business_id):
+def check_sales_drop(business_id, thresholds):
     """Compare today's sales to the 30-day daily average."""
     created = 0
+    drop_pct = thresholds.get("sales_drop_pct", 50.0)
+
     now = datetime.utcnow()
     cutoff = now - timedelta(days=30)
 
@@ -312,12 +360,11 @@ def check_sales_drop(business_id):
     if daily_avg <= 0:
         return 0
 
-    # Only alert if it's genuinely a drop and it's late enough in the day
     if now.hour < 15:
         return 0
 
     pct_of_avg = (today_total / daily_avg) * 100
-    if pct_of_avg < SALES_DROP_PCT:
+    if pct_of_avg < drop_pct:
         if _add(business_id,
                 "Sales unusually low today",
                 f"Today's sales (KSh {today_total:,.2f}) are only "
@@ -330,18 +377,19 @@ def check_sales_drop(business_id):
 
 
 # ---------------------------------------------------------------
-# Entry point — run every check, commit, return count
+# Entry point — load thresholds once, run all checks, commit
 # ---------------------------------------------------------------
 def run_all_checks(business_id):
+    t = _load_thresholds(business_id)
     created = 0
-    created += check_low_stock(business_id)
-    created += check_expiring_stock(business_id)
-    created += check_customer_credit(business_id)
-    created += check_supplier_prices(business_id)
-    created += check_discount_abuse(business_id)
-    created += check_employee_discount_rate(business_id)
-    created += check_expense_spikes(business_id)
-    created += check_sales_drop(business_id)
+    created += check_low_stock(business_id, t)
+    created += check_expiring_stock(business_id, t)
+    created += check_customer_credit(business_id, t)
+    created += check_supplier_prices(business_id, t)
+    created += check_discount_abuse(business_id, t)
+    created += check_employee_discount_rate(business_id, t)
+    created += check_expense_spikes(business_id, t)
+    created += check_sales_drop(business_id, t)
 
     db.session.commit()
     return created

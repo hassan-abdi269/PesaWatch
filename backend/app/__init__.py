@@ -15,6 +15,7 @@ from .routes.employees import employees_bp
 from .routes.leakage import leakage_bp
 from .routes.reports import reports_bp
 from .routes.notifications import notifications_bp
+from .routes.settings import settings_bp
 
 migrate = Migrate()                            # ← new (module-level)
 
@@ -50,6 +51,7 @@ def create_app():
     app.register_blueprint(leakage_bp, url_prefix="/api")
     app.register_blueprint(reports_bp, url_prefix="/api")
     app.register_blueprint(notifications_bp, url_prefix="/api")
+    app.register_blueprint(settings_bp, url_prefix="/api")
 
     @app.get("/api/health")
     def health():
