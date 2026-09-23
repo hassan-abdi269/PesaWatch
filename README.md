@@ -85,3 +85,4 @@ This account is for local development only.
 
 The project uses SQLite in development for quick setup and local testing. The SQLAlchemy setup is designed to remain compatible with MySQL in production with a simple configuration change.
 
+
