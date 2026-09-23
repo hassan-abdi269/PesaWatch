@@ -33,7 +33,8 @@ export default function NotificationsPage() {
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
-  const [filter, setFilter] = useState('all')  // all | unread | read
+  const [flash, setFlash] = useState('')
+  const [filter, setFilter] = useState('all')
 
   async function loadAll() {
     setLoading(true)
@@ -55,6 +56,26 @@ export default function NotificationsPage() {
   useEffect(() => {
     loadAll()
   }, [])
+
+  function showFlash(msg) {
+    setFlash(msg)
+    setTimeout(() => setFlash(''), 3000)
+  }
+
+  async function runChecks() {
+    setWorking(true)
+    setError('')
+    try {
+      const { data } = await api.post('/notifications/run-checks')
+      await loadAll()
+      showFlash(data.message || 'Checks complete.')
+    } catch (err) {
+      console.error(err)
+      setError('Failed to run notification checks.')
+    } finally {
+      setWorking(false)
+    }
+  }
 
   async function markRead(n) {
     if (n.read) return
@@ -127,17 +148,30 @@ export default function NotificationsPage() {
             {summary.unread} unread · {summary.total} total
           </p>
         </div>
-        <button
-          onClick={markAllRead}
-          disabled={working || summary.unread === 0}
-          className="rounded-full bg-brand-700 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-800 disabled:opacity-50"
-        >
-          Mark all as read
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={runChecks}
+            disabled={working}
+            className="rounded-full bg-brand-700 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-800 disabled:opacity-50"
+          >
+            {working ? 'Scanning…' : 'Run checks'}
+          </button>
+          <button
+            onClick={markAllRead}
+            disabled={working || summary.unread === 0}
+            className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Mark all as read
+          </button>
+        </div>
       </div>
 
       {error && (
         <div className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+      )}
+
+      {flash && (
+        <div className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{flash}</div>
       )}
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -183,8 +217,9 @@ export default function NotificationsPage() {
             {filter === 'all' ? 'No notifications' : `No ${filter} notifications`}
           </h2>
           <p className="mt-2 text-sm text-slate-500">
-            When something needs your attention — cash variance, overdue credit,
-            stock issues — it will show up here.
+            Click <strong>Run checks</strong> to scan your sales, stock,
+            customers, suppliers and expenses for anything that needs your
+            attention.
           </p>
         </div>
       ) : (

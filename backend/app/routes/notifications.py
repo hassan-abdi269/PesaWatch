@@ -3,6 +3,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from app.extensions import db
 from app.models import User, Notification
+from app.services.notification_engine import run_all_checks
 
 notifications_bp = Blueprint("notifications", __name__)
 
@@ -24,7 +25,6 @@ def _serialize(n):
 
 # ---------------------------------------------------------------
 # GET /api/notifications
-# Optional query: ?unread=true  ?limit=20
 # ---------------------------------------------------------------
 @notifications_bp.get("/notifications")
 @jwt_required()
@@ -48,8 +48,7 @@ def get_notifications():
 
 
 # ---------------------------------------------------------------
-# GET /api/notifications/summary
-# NOTE: declared BEFORE /<int:notification_id> routes
+# GET /api/notifications/summary  — MUST come before <int:id> routes
 # ---------------------------------------------------------------
 @notifications_bp.get("/notifications/summary")
 @jwt_required()
@@ -66,6 +65,29 @@ def notifications_summary():
         "unread": int(unread),
         "read": int(total - unread),
     }})
+
+
+# ---------------------------------------------------------------
+# POST /api/notifications/run-checks
+# ---------------------------------------------------------------
+@notifications_bp.post("/notifications/run-checks")
+@jwt_required()
+def run_notification_checks():
+    user = _current_user()
+    if not user:
+        return jsonify({"success": False, "message": "User not found"}), 404
+
+    try:
+        created = run_all_checks(user.business_id)
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
+
+    return jsonify({
+        "success": True,
+        "message": f"{created} new notification(s) created.",
+        "created": created,
+    })
 
 
 # ---------------------------------------------------------------
@@ -87,7 +109,7 @@ def mark_all_notifications_read():
 
 
 # ---------------------------------------------------------------
-# PUT /api/notifications/<id>/read  and  /unread
+# PUT /api/notifications/<id>/read
 # ---------------------------------------------------------------
 @notifications_bp.put("/notifications/<int:notification_id>/read")
 @jwt_required()
@@ -108,6 +130,9 @@ def mark_notification_read(notification_id):
                     "message": "Notification marked as read."})
 
 
+# ---------------------------------------------------------------
+# PUT /api/notifications/<id>/unread
+# ---------------------------------------------------------------
 @notifications_bp.put("/notifications/<int:notification_id>/unread")
 @jwt_required()
 def mark_notification_unread(notification_id):
@@ -146,3 +171,20 @@ def delete_notification(notification_id):
     db.session.delete(n)
     db.session.commit()
     return jsonify({"success": True, "message": "Notification deleted."})
+
+
+# ---------------------------------------------------------------
+# DELETE /api/notifications  — wipe all (dev helper)
+# ---------------------------------------------------------------
+@notifications_bp.delete("/notifications")
+@jwt_required()
+def clear_all_notifications():
+    user = _current_user()
+    if not user:
+        return jsonify({"success": False, "message": "User not found"}), 404
+
+    (Notification.query
+     .filter_by(business_id=user.business_id)
+     .delete(synchronize_session=False))
+    db.session.commit()
+    return jsonify({"success": True, "message": "All notifications cleared."})
