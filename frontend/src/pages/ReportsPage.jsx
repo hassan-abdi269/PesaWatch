@@ -2,12 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import api from '../services/api'
 
 const REPORTS = [
-  { key: 'sales',     title: 'Sales',              endpoint: '/reports/sales',            csvType: 'sales',     range: true  },
-  { key: 'profit',    title: 'Profit & Loss',      endpoint: '/reports/profit',           csvType: 'profit',    range: true  },
-  { key: 'expenses',  title: 'Expenses',           endpoint: '/reports/expenses',         csvType: 'expenses',  range: true  },
-  { key: 'leakage',   title: 'Leakage',            endpoint: '/reports/leakage',          csvType: 'leakage',   range: false },
-  { key: 'credit',    title: 'Customer Credit',    endpoint: '/reports/customer-credit',  csvType: 'credit',    range: false },
-  { key: 'suppliers', title: 'Supplier Pricing',   endpoint: '/reports/supplier-prices',  csvType: 'suppliers', range: false },
+  { key: 'sales',     title: 'Sales',            endpoint: '/reports/sales',           csvType: 'sales',     range: true  },
+  { key: 'profit',    title: 'Profit & Loss',    endpoint: '/reports/profit',          csvType: 'profit',    range: true  },
+  { key: 'expenses',  title: 'Expenses',         endpoint: '/reports/expenses',        csvType: 'expenses',  range: true  },
+  { key: 'leakage',   title: 'Leakage',          endpoint: '/reports/leakage',         csvType: 'leakage',   range: false },
+  { key: 'credit',    title: 'Customer Credit',  endpoint: '/reports/customer-credit', csvType: 'credit',    range: false },
+  { key: 'suppliers', title: 'Supplier Pricing', endpoint: '/reports/supplier-prices', csvType: 'suppliers', range: false },
 ]
 
 function isoDaysAgo(days) {
@@ -29,7 +29,6 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [active, setActive] = useState('sales')
-  const [expandedKey, setExpandedKey] = useState(null)
 
   const range = useMemo(() => ({ from, to }), [from, to])
 
@@ -42,7 +41,7 @@ export default function ReportsPage() {
           api
             .get(r.endpoint, r.range ? { params: range } : undefined)
             .then((res) => [r.key, res.data.data])
-            .catch((err) => [r.key, { __error: err?.response?.data?.message || 'Failed' }])
+            .catch((err) => [r.key, { __error: err?.response?.data?.message || 'Failed to load' }])
         )
       )
       setData(Object.fromEntries(results))
@@ -123,7 +122,6 @@ export default function ReportsPage() {
         <div className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
       )}
 
-      {/* Tabs */}
       <div className="flex flex-wrap gap-2">
         {REPORTS.map((r) => (
           <button
@@ -132,7 +130,7 @@ export default function ReportsPage() {
             className={`rounded-full px-4 py-1.5 text-xs font-semibold ${
               active === r.key
                 ? 'bg-brand-700 text-white'
-                : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+                : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
             }`}
           >
             {r.title}
@@ -140,7 +138,6 @@ export default function ReportsPage() {
         ))}
       </div>
 
-      {/* Active report */}
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-soft">
         <div className="flex items-center justify-between">
           <div>
@@ -175,26 +172,19 @@ export default function ReportsPage() {
   )
 }
 
-/* -------------------- Per-report renderers -------------------- */
+/* -------------------- Renderers -------------------- */
 
 function ReportBody({ kind, data }) {
   if (!data) return <div className="text-sm text-slate-500">No data.</div>
 
   switch (kind) {
-    case 'sales':
-      return <SalesReport data={data} />
-    case 'profit':
-      return <ProfitReport data={data} />
-    case 'expenses':
-      return <ExpensesReport data={data} />
-    case 'leakage':
-      return <LeakageReport data={data} />
-    case 'credit':
-      return <CreditReport data={data} />
-    case 'suppliers':
-      return <SuppliersReport data={data} />
-    default:
-      return null
+    case 'sales':     return <SalesReport data={data} />
+    case 'profit':    return <ProfitReport data={data} />
+    case 'expenses':  return <ExpensesReport data={data} />
+    case 'leakage':   return <LeakageReport data={data} />
+    case 'credit':    return <CreditReport data={data} />
+    case 'suppliers': return <SuppliersReport data={data} />
+    default:          return null
   }
 }
 
@@ -405,7 +395,7 @@ function SuppliersReport({ data }) {
             label: 'Increase',
             render: (r) => (
               <span className={
-                r.increasePct > 10 ? 'text-red-700 font-semibold'
+                r.increasePct > 10 ? 'font-semibold text-red-700'
                 : r.increasePct > 0 ? 'text-amber-700'
                 : 'text-emerald-700'
               }>

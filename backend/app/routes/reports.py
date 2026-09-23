@@ -3,10 +3,9 @@ import io
 from datetime import datetime, timedelta
 from flask import Blueprint, jsonify, request, Response
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from sqlalchemy import func
 
 from app.extensions import db
-from app.models import User, Sale, SaleItem, Expense, Leakage, Customer, Supplier, Product
+from app.models import User, Sale, Expense, Leakage, Customer, Supplier
 
 reports_bp = Blueprint("reports", __name__)
 
@@ -18,36 +17,41 @@ def _current_user():
     return User.query.get(int(get_jwt_identity()))
 
 
-def _parse_date(value, default):
+def _parse_date(value, default, end_of_day=False):
+    """Parse an ISO date. When end_of_day=True and the input has no time
+    component, treat it as 23:59:59 of that day — so `to=2026-09-23`
+    includes sales at 13:00 on that same day."""
     if not value:
         return default
     try:
-        return datetime.fromisoformat(value)
+        dt = datetime.fromisoformat(value)
     except (ValueError, TypeError):
         return default
+    if end_of_day and dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+        dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return dt
 
 
 def _range_from_request(default_days=30):
-    """Returns (from_dt, to_dt) from ?from=&to= or the last N days."""
-    to_dt = _parse_date(request.args.get("to"), datetime.utcnow())
-    from_dt = _parse_date(request.args.get("from"), to_dt - timedelta(days=default_days))
+    to_dt = _parse_date(request.args.get("to"), datetime.utcnow(), end_of_day=True)
+    from_dt = _parse_date(
+        request.args.get("from"),
+        to_dt - timedelta(days=default_days),
+    )
     return from_dt, to_dt
 
 
 def _csv_response(rows, filename):
-    """Given a list of dicts, return a CSV file response."""
     if not rows:
         return Response(
             "no data\n",
             mimetype="text/csv",
             headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
-
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()))
     writer.writeheader()
     writer.writerows(rows)
-
     return Response(
         buffer.getvalue(),
         mimetype="text/csv",
@@ -56,7 +60,7 @@ def _csv_response(rows, filename):
 
 
 # ---------------------------------------------------------------
-# 1. Sales report — totals + daily breakdown
+# 1. Sales
 # ---------------------------------------------------------------
 @reports_bp.get("/reports/sales")
 @jwt_required()
@@ -77,7 +81,6 @@ def report_sales():
     count = len(rows)
     avg = (total / count) if count else 0.0
 
-    # Daily breakdown
     daily = {}
     for s in rows:
         day = (s.date or datetime.utcnow()).date().isoformat()
@@ -96,7 +99,7 @@ def report_sales():
 
 
 # ---------------------------------------------------------------
-# 2. Profit & loss report
+# 2. Profit & Loss
 # ---------------------------------------------------------------
 @reports_bp.get("/reports/profit")
 @jwt_required()
@@ -123,7 +126,6 @@ def report_profit():
     costs = sum(float(e.amount or 0) for e in expenses)
     profit = revenue - discounts - costs
 
-    # Expense breakdown by category
     by_cat = {}
     for e in expenses:
         key = e.category or "Other"
@@ -145,7 +147,44 @@ def report_profit():
 
 
 # ---------------------------------------------------------------
-# 3. Leakage report
+# 3. Expenses
+# ---------------------------------------------------------------
+@reports_bp.get("/reports/expenses")
+@jwt_required()
+def report_expenses():
+    user = _current_user()
+    if not user:
+        return jsonify({"success": False, "message": "User not found"}), 404
+
+    from_dt, to_dt = _range_from_request()
+
+    expenses = (Expense.query
+                .filter(Expense.business_id == user.business_id,
+                        Expense.date >= from_dt,
+                        Expense.date <= to_dt)
+                .all())
+
+    total = sum(float(e.amount or 0) for e in expenses)
+
+    by_cat = {}
+    for e in expenses:
+        key = e.category or "Other"
+        by_cat[key] = by_cat.get(key, 0.0) + float(e.amount or 0)
+
+    return jsonify({"success": True, "data": {
+        "from": from_dt.isoformat(),
+        "to": to_dt.isoformat(),
+        "totalExpenses": round(total, 2),
+        "count": len(expenses),
+        "byCategory": [
+            {"category": k, "amount": round(v, 2)}
+            for k, v in sorted(by_cat.items(), key=lambda x: -x[1])
+        ],
+    }})
+
+
+# ---------------------------------------------------------------
+# 4. Leakage
 # ---------------------------------------------------------------
 @reports_bp.get("/reports/leakage")
 @jwt_required()
@@ -183,7 +222,7 @@ def report_leakage():
 
 
 # ---------------------------------------------------------------
-# 4. Customer credit report
+# 5. Customer Credit
 # ---------------------------------------------------------------
 @reports_bp.get("/reports/customer-credit")
 @jwt_required()
@@ -227,7 +266,7 @@ def report_customer_credit():
 
 
 # ---------------------------------------------------------------
-# 5. Supplier price report
+# 6. Supplier Prices
 # ---------------------------------------------------------------
 @reports_bp.get("/reports/supplier-prices")
 @jwt_required()
@@ -264,44 +303,7 @@ def report_supplier_prices():
 
 
 # ---------------------------------------------------------------
-# 6. Expenses report
-# ---------------------------------------------------------------
-@reports_bp.get("/reports/expenses")
-@jwt_required()
-def report_expenses():
-    user = _current_user()
-    if not user:
-        return jsonify({"success": False, "message": "User not found"}), 404
-
-    from_dt, to_dt = _range_from_request()
-
-    expenses = (Expense.query
-                .filter(Expense.business_id == user.business_id,
-                        Expense.date >= from_dt,
-                        Expense.date <= to_dt)
-                .all())
-
-    total = sum(float(e.amount or 0) for e in expenses)
-
-    by_cat = {}
-    for e in expenses:
-        key = e.category or "Other"
-        by_cat[key] = by_cat.get(key, 0.0) + float(e.amount or 0)
-
-    return jsonify({"success": True, "data": {
-        "from": from_dt.isoformat(),
-        "to": to_dt.isoformat(),
-        "totalExpenses": round(total, 2),
-        "count": len(expenses),
-        "byCategory": [
-            {"category": k, "amount": round(v, 2)}
-            for k, v in sorted(by_cat.items(), key=lambda x: -x[1])
-        ],
-    }})
-
-
-# ---------------------------------------------------------------
-# CSV export — ?type=sales|profit|leakage|credit|suppliers|expenses
+# CSV export
 # ---------------------------------------------------------------
 @reports_bp.get("/reports/export")
 @jwt_required()
