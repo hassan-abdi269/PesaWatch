@@ -1,5 +1,7 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from datetime import datetime, timedelta
+from sqlalchemy import func
 
 from app.extensions import db
 from app.models import User, Sale
@@ -35,7 +37,7 @@ def create_sale():
 
     sale = Sale(
         business_id=user.business_id,
-        invoice_no=data.get("invoiceNo", "INV-AUTO"),
+        invoice_no = data.get("invoiceNo") or f"INV-{int(datetime.utcnow().timestamp())}",
         customer_name=data.get("customerName", "Walk-in"),
         payment_method=data.get("paymentMethod", "Cash"),
         amount=float(data.get("amount") or 0),
@@ -79,3 +81,29 @@ def delete_sale(sale_id):
     db.session.delete(sale)
     db.session.commit()
     return jsonify({"success": True, "message": "Sale deleted."})
+
+
+@sales_bp.get("/sales/summary")
+@jwt_required()
+def sales_summary():
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+
+    base = Sale.query.filter_by(business_id=user.business_id)
+
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    total = base.with_entities(func.coalesce(func.sum(Sale.amount), 0)).scalar() or 0
+    today = base.filter(Sale.date >= today_start) \
+                .with_entities(func.coalesce(func.sum(Sale.amount), 0)).scalar() or 0
+    cash = base.filter(Sale.payment_method == "Cash") \
+               .with_entities(func.coalesce(func.sum(Sale.amount), 0)).scalar() or 0
+    mpesa = base.filter(Sale.payment_method == "M-Pesa") \
+                .with_entities(func.coalesce(func.sum(Sale.amount), 0)).scalar() or 0
+
+    return jsonify({"success": True, "data": {
+        "todaySales": float(today),
+        "totalSales": float(total),
+        "cashSales": float(cash),
+        "mpesaSales": float(mpesa),
+    }})

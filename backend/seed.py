@@ -3,15 +3,24 @@ from werkzeug.security import generate_password_hash
 
 from app import create_app
 from app.extensions import db
-from app.models import Business, User, Employee, Product, Sale, Expense, Customer, Supplier, Leakage, Notification
+from app.models import (
+    Business, User, Employee, Product, Sale, Expense,
+    Customer, Supplier, Leakage, Notification,
+)
 
 
 def seed_data():
     app = create_app()
     with app.app_context():
-        db.drop_all()
+        # 1. Ensure tables exist — but do NOT drop them.
         db.create_all()
 
+        # 2. If the DB already has data, bail out and keep it.
+        if Business.query.first() is not None:
+            print("Database already contains data — skipping seed.")
+            return
+
+        # ---- From here on, this is your original demo data ----
         business = Business(
             name="Mwangaza Mini-Mart",
             business_type="Mini-Mart",
@@ -74,7 +83,8 @@ def seed_data():
             db.session.add(Sale(
                 business_id=business.id, invoice_no=f"INV-{index + 1:04d}",
                 date=datetime.utcnow() - timedelta(days=(8 - index) * 20),
-                customer_name="Walk-in customers", payment_method=("Cash" if index % 2 == 0 else "M-Pesa"),
+                customer_name="Walk-in customers",
+                payment_method=("Cash" if index % 2 == 0 else "M-Pesa"),
                 amount=amount, discount=0, employee_id=employee.id, status="Paid",
             ))
         for category, description, amount, method in [

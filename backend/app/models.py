@@ -66,22 +66,45 @@ class Product(db.Model):
     expiry_date = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    sale_items = db.relationship("SaleItem", backref="product", lazy=True)
 
 
 class Sale(db.Model):
     __tablename__ = "sales"
     id = db.Column(db.Integer, primary_key=True)
     business_id = db.Column(db.Integer, db.ForeignKey("businesses.id"), nullable=False)
-    invoice_no = db.Column(db.String(100), nullable=False)
+    customer_id = db.Column(db.Integer, db.ForeignKey("customers.id"), nullable=True)
+    employee_id = db.Column(db.Integer, db.ForeignKey("employees.id"), nullable=True)
+
+    invoice_no = db.Column(db.String(100), nullable=False, unique=True)
     date = db.Column(db.DateTime, default=datetime.utcnow)
     customer_name = db.Column(db.String(200), default="Walk-in")
     payment_method = db.Column(db.String(50), default="Cash")
-    amount = db.Column(db.Float, default=0)
+
+    amount = db.Column(db.Float, default=0)      # gross before discount
     discount = db.Column(db.Float, default=0)
-    employee_id = db.Column(db.Integer, db.ForeignKey("employees.id"), nullable=True)
-    status = db.Column(db.String(50), default="Paid")
+    status = db.Column(db.String(50), default="Paid")   # Paid | Pending | Refunded
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    items = db.relationship("SaleItem", backref="sale", cascade="all, delete-orphan", lazy=True)
+
+
+class SaleItem(db.Model):
+    __tablename__ = "sale_items"
+    id = db.Column(db.Integer, primary_key=True)
+    sale_id = db.Column(db.Integer, db.ForeignKey("sales.id"), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey("products.id"), nullable=True)
+
+    product_name = db.Column(db.String(200), nullable=False)
+    quantity = db.Column(db.Float, default=1)
+    unit_price = db.Column(db.Float, default=0)      # price actually charged
+    cost_price = db.Column(db.Float, default=0)      # snapshot at time of sale
+    line_total = db.Column(db.Float, default=0)      # quantity * unit_price - line discount
+    line_discount = db.Column(db.Float, default=0)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 class Expense(db.Model):
@@ -111,6 +134,7 @@ class Customer(db.Model):
     status = db.Column(db.String(50), default="Open")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    sales = db.relationship("Sale", backref="customer", lazy=True)
 
 
 class Supplier(db.Model):
