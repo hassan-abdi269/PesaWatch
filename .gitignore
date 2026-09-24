@@ -38,3 +38,4 @@ frontend/.vite/
 # OS
 .DS_Store
 **/__pycache__/
+*:Zone.Identifier
